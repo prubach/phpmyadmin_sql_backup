@@ -94,11 +94,7 @@ def export_to_folder(url, user, password, dry_run=False, overwrite_existing=Fals
     file_content = response.read()
     with open(out_filename, 'wb') as file:
         file.write(file_content)
-
-
-    # assert(b'Dump has been saved to file' in response)
-    # assert(b'Dump has been saved to file /etc/phpmyadmin/exports/db_server.sql' in response)
-    # assert os.path.exists(save_dir + "/db_server.sql") == True
+    return out_filename
 
 
 if __name__ == '__main__':
@@ -124,6 +120,8 @@ if __name__ == '__main__':
                         help='the desired basename (without extension) of the SQL dump file (default: dump'
                              '); you can also set an empty basename "" in combination with '
                              '--prepend-date and --prefix-format')
+    parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                        help='do not print any output')
     parser.add_argument('--timeout', type=int, default=60,
                         help='timeout in seconds for the requests (default: %(default)s)')
     parser.add_argument('--overwrite-existing', action='store_true', default=False,
@@ -149,5 +147,6 @@ if __name__ == '__main__':
         print('Error: {}'.format(e), file=sys.stderr)
         sys.exit(1)
 
-    print('{} saved SQL dump to: {}'.format(('Would have' if args.dry_run else 'Successfully'), dump_fn),
+    if not args.quiet:
+        print('{} saved SQL dump to: {}'.format(('Would have' if args.dry_run else 'Successfully'), dump_fn),
           file=sys.stdout)
