@@ -1,96 +1,82 @@
 #!/usr/bin/env python3
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-####################################################################################
-#
-# A Python script to automate the download of SQL dump backups
-# via a phpMyAdmin web interface.
-#
-# tested on Python 3.4+
-# requires: grab (http://grablib.org/)
-#
-# Christoph Haunschmidt, started 2016-03
-
 import argparse
-import datetime
 import os
 import re
 import sys
+import datetime
+import mechanize
 
-import grab
-
-__version__ = '2019-05-07.1'
-
+__version__ = '2025-04-06'
 CONTENT_DISPOSITION_FILENAME_RE = re.compile(r'^.*filename="(?P<filename>[^"]+)".*$')
-DEFAULT_PREFIX_FORMAT = r'%Y-%m-%d--%H-%M-%S-UTC_'
+DEFAULT_PREFIX_FORMAT = r'%Y%m%d_%H%M%S_'
+
+def create_browser():
+    br = mechanize.Browser()
+    # Ignore robots.txt
+    br.set_handle_robots(False)
+    return br
+
+def do_login(br, url, username, password, server):
+    # Login page
+    br.open(url)
+
+    # Fill login form
+    br.select_form('login_form')
+    br['pma_username'] = username
+    br['pma_password'] = password
+    if server is not None:
+        br['pma_servername'] = server
+
+    # Login and check if logged in
+    response = br.submit()
+    return response
+
+def get_world_sql_path():
+    if os.path.exists('/world.sql'):
+        return '/world.sql'
+    elif os.path.exists('./world.sql'):
+        return './world.sql'
+    else:
+        path = os.path.dirname(os.path.realpath(__file__))
+        return path + '/world.sql'
 
 
-def is_login_successful(g):
-    return g.doc.text_search("frame_content") or g.doc.text_search("server_export.php")
-
-
-def open_frame_if_phpmyadmin_3(g):
-    frame_url_selector = g.doc.select("id('frame_content')/@src")
-    if frame_url_selector.exists():
-        g.go(frame_url_selector.text())
-
-
-def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=False, prepend_date=True, basename=None,
+def export_to_folder(url, user, password, dry_run=False, overwrite_existing=False, prepend_date=True, basename=None,
                         output_directory=os.getcwd(), exclude_dbs=None, compression='none', prefix_format=None,
                         timeout=60, http_auth=None, server_name=None, **kwargs):
+
     prefix_format = prefix_format or DEFAULT_PREFIX_FORMAT
     exclude_dbs = exclude_dbs.split(',') or []
     encoding = '' if compression == 'gzip' else 'gzip'
 
-    g = grab.Grab(encoding=encoding, timeout=timeout)
-    if http_auth:
-        g.setup(userpwd=http_auth)
-    g.go(url)
+    save_dir = output_directory
 
-    g.doc.set_input_by_id('input_username', user)
-    g.doc.set_input_by_id('input_password', password)
-    if server_name:
-        g.doc.set_input_by_id('input_servername', server_name)
-    g.submit()
+    br = create_browser()
 
-    if not is_login_successful(g):
-        raise ValueError('Could not login - did you provide the correct username / password?')
+    response = do_login(br, url, user, password, server_name)
 
-    open_frame_if_phpmyadmin_3(g)
+    assert(b'Server version' in response.read())
 
-    export_url = g.doc.select("id('topmenu')//a[contains(@href,'server_export.php')]/@href").text()
-    g.go(export_url)
+    # Open server export
+    response = br.follow_link(text_regex=re.compile('Export'))
+    response = response.read()
+    br.select_form('dump')
 
-    dbs_available = [option.attrib['value'] for option in g.doc.form.inputs['db_select[]']]
-    dbs_to_dump = [db_name for db_name in dbs_available if db_name not in exclude_dbs]
-    if not dbs_to_dump:
-        print('Warning: no databases to dump (databases available: "{}")'.format('", "'.join(dbs_available)),
-            file=sys.stderr)
+    if compression != 'none':
+        item = br.find_control('compression').get(compression)
+        item.selected = True
+    response = br.submit()
 
-    file_response = g.submit(
-        extra_post=[('db_select[]', db_name) for db_name in dbs_to_dump] + [('compression', compression)])
-
-    re_match = CONTENT_DISPOSITION_FILENAME_RE.match(g.doc.headers['Content-Disposition'])
+    re_match = CONTENT_DISPOSITION_FILENAME_RE.match(response.headers['Content-Disposition'])
     if not re_match:
         raise ValueError(
-            'Could not determine SQL backup filename from {}'.format(g.doc.headers['Content-Disposition']))
+            'Could not determine SQL backup filename from {}'.format(response.headers['Content-Disposition']))
 
     content_filename = re_match.group('filename')
     filename = content_filename if basename is None else basename + os.path.splitext(content_filename)[1]
+
     if prepend_date:
-        prefix = datetime.datetime.utcnow().strftime(prefix_format)
+        prefix = datetime.datetime.now().strftime(prefix_format)
         filename = prefix + filename
     out_filename = os.path.join(output_directory, filename)
 
@@ -105,16 +91,20 @@ def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=F
                 break
             n += 1
 
-    if not dry_run:
-        file_response.save(out_filename)
+    file_content = response.read()
+    with open(out_filename, 'wb') as file:
+        file.write(file_content)
 
-    return out_filename
+
+    # assert(b'Dump has been saved to file' in response)
+    # assert(b'Dump has been saved to file /etc/phpmyadmin/exports/db_server.sql' in response)
+    # assert os.path.exists(save_dir + "/db_server.sql") == True
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Automates the download of SQL dump backups via a phpMyAdmin web interface.',
-        epilog='Written by Christoph Haunschmidt et al., version: {}'.format(__version__))
+        description='Automates the download of SQL dump backups via a phpMyAdmin web interface. Based on https://github.com/phpmyadmin/docker/blob/master/testing/phpmyadmin_test.py',
+        epilog='Program options from: https://github.com/qubitstream/phpmyadmin_sql_backup, by Pawel Rubach version: {}'.format(__version__))
 
     parser.add_argument('url', metavar='URL', help='phpMyAdmin login page url')
     parser.add_argument('user', metavar='USERNAME', help='phpMyAdmin login username')
@@ -128,11 +118,11 @@ if __name__ == '__main__':
                         help='comma-separated list of database names to exclude from the dump')
     parser.add_argument('-s', '--server-name', default=None,
                         help='mysql server hostname to supply if enabled as field on login page')
-    parser.add_argument('--compression', default='none', choices=['none', 'zip', 'gzip'],
+    parser.add_argument('-c', '--compression', default='none', choices=['none', 'zip', 'gzip'],
                         help='compression method for the output file - must be supported by the server (default: %(default)s)')
     parser.add_argument('--basename', default=None,
-                        help='the desired basename (without extension) of the SQL dump file (default: the name given '
-                             'by phpMyAdmin); you can also set an empty basename "" in combination with '
+                        help='the desired basename (without extension) of the SQL dump file (default: dump'
+                             '); you can also set an empty basename "" in combination with '
                              '--prepend-date and --prefix-format')
     parser.add_argument('--timeout', type=int, default=60,
                         help='timeout in seconds for the requests (default: %(default)s)')
@@ -154,7 +144,7 @@ if __name__ == '__main__':
         sys.exit(2)
 
     try:
-        dump_fn = download_sql_backup(**vars(args))
+        dump_fn = export_to_folder(**vars(args))
     except Exception as e:
         print('Error: {}'.format(e), file=sys.stderr)
         sys.exit(1)
