@@ -66,3 +66,5 @@ target/
 venv
 .venv
 # Created by .ignore support plugin (hsz.mobi)
+.credentials
+data

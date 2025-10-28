@@ -87,6 +87,22 @@ UTC date / time to the directory `/tmp`, e.g. `/tmp/2016-03-11--15-19-04-UTC_exa
  - A [Python 3.12](https://www.python.org/) installation on your system
  - mechanize
 
+## Run using Docker container
+
+The "mechanize" package is problematic on some OSes, i.e. Mac OS Sequoia (15.2) on Intel.
+The provided docker container should work around this issue.
+Please provide a file `.credentials` with your credentials as follows:
+
+```
+#!/bin/bash
+export SQLURL=https://yourserver/index.php
+export SQLUSER=youruser
+export SQLPASS=yourpass
+export SQLOPTIONS=""
+```
+
+Then run: `./build` to build the container and `./run` to run it.
+
 ## License
 
 [GNU GPL3](https://www.gnu.org/licenses/gpl-3.0.html)

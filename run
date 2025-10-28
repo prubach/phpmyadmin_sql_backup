@@ -1,0 +1,2 @@
+#!/bin/bash
+docker run -v `pwd`/.credentials:/.credentials -v `pwd`/data:/data phpmyadmin_sql_backup
